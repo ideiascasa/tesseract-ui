@@ -9,6 +9,7 @@
 	import MenuBread from './menu-bread.svelte';
 	import NavActions from './nav-actions.svelte';
 	import { page } from '$app/stores';
+	import { SidebarTrigger } from '$lib/components/ui/sidebar';
 
 	let { ref = $bindable(null), ...restProps }: ComponentProps<typeof Sidebar.Root> = $props();
 
@@ -24,7 +25,9 @@
 <header class="bg-background sticky top-0 z-50 flex w-full items-center border-b px-4">
 	<div class="h-(--header-height) flex w-full items-center gap-2" {...restProps}>
 		<Button class="size-8" variant="ghost" size="icon">
+<!--			<SidebarTrigger className="-ml-1" >-->
 			<SidebarIcon />
+<!--			</SidebarTrigger>-->
 		</Button>
 		<Separator orientation="vertical" class="mr-2 h-4" />
 		<MenuBread />

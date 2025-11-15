@@ -5,6 +5,9 @@
 - try using "nvm use", to set the correct node version. Before running any "node" app.
 - [routes](src/routes) - In that directory must reside all modules, crud, backend and frontend.
 - Each module must be in a group. Look that module as an example "src/routes/user". Everything about the User module must be in that directory, including unit tests and SSR (server side rendering) and backend functions. Everything! In the same directory. The only exception is End-to-End tests, which must be in "/e2e/".
+- Each module must create a group on table named "group", add do table "rel_group" the user id "1" will be the administrator. On user id "1" logins, make sure that user "1" is the administrator of all modules and groups.
+- Each module must have an "SoftwareItem" here "src/lib/app.ts" that is the way to users gain access to the module.
+- 
 - Should ignore this directory: "/stash"
 - Database Schema - [schema.md](src/lib/db/schema.md) - [schema.ts](src/lib/db/schema.ts) - These files contain the data structure. Also maintain the data structure documentation using Mermaid.js. Run "pnpm db:push" to apply modifications to schema (this command need human review)
 - Maintain [All Project Documentation and Specifications](./SPEC.md).

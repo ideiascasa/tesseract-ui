@@ -69,7 +69,7 @@ jobs:
           Read the subject has a tag inside brackets and discover if it's a bug, feature, documentation or command.
           If it's a Feature:
           - Document it on '/SPEC.md'
-          - Create a new branch from 'main' to 'feat/feature-***' where *** its the name of the feature; Code the feature and create a PR to 'pre' AND merge with 'dev' branch.
+          - Create a new branch from 'main' to 'feat/feature-***' where *** its the name of the feature OR use the same branch that you discover reading all comments refining the work; Code the feature and create a PR to 'pre' AND merge with 'dev' branch.
           - Remember to link the PR to the issue.
           
           If it's a Bug:

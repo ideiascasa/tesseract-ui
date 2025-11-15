@@ -271,6 +271,152 @@ push_single_env() {
     fi
 }
 
+# Function to pull a single environment variable or variables matching a prefix from Vercel into .env
+pull_single_env() {
+    local var_pattern="$1"
+    local env="$2"
+    local env_display=$(echo "$env" | tr '[:lower:]' '[:upper:]')
+
+    check_vercel_cli
+    check_vercel_auth
+
+    if [ -z "$var_pattern" ]; then
+        echo -e "${RED}Error: Variable name or prefix is required${NC}"
+        echo "Usage: $0 pull-single VARIABLE_NAME_OR_PREFIX [environment]"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Pulling environment variables from $env_display (Vercel) matching '${GREEN}$var_pattern${BLUE}'...${NC}"
+
+    # Create temporary file to hold all variables pulled from Vercel
+    local tmp_env_file
+    tmp_env_file=$(mktemp 2>/dev/null || echo "/tmp/vercel-env-pull-single-$$.env")
+
+    echo 'y' | npx vercel env pull "$tmp_env_file" --environment="$env"
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ Failed to pull environment variables from Vercel${NC}"
+        [ -f "$tmp_env_file" ] && rm -f "$tmp_env_file"
+        exit 1
+    fi
+
+    # Remove VERCEL_OIDC_TOKEN and NODE_ENV from the temporary env file
+    if [ -f "$tmp_env_file" ]; then
+        sed -i.bak '/^VERCEL_OIDC_TOKEN=/d; /^NODE_ENV=/d' "$tmp_env_file"
+        # Clean up literal escape sequences (\n, \r, \t) from environment variable values
+        sed -i.bak 's/\\n"$/"/g; s/\\r"$/"/g; s/\\t"$/"/g; s/\\n$//g; s/\\r$//g; s/\\t$//g' "$tmp_env_file"
+        sed -i.bak 's/\\n//g; s/\\r//g; s/\\t//g' "$tmp_env_file"
+        rm -f "$tmp_env_file.bak"
+    fi
+
+    # Collect matching variables - try exact match first, then prefix match
+    declare -a matching_vars
+    declare -a matching_lines
+    local is_prefix=false
+
+    # First pass: try exact match
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines and comments
+        if [[ -z "$line" ]] || [[ "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+
+        # Extract variable name and value
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            local current_var_name="${BASH_REMATCH[1]}"
+
+            # Skip VERCEL_OIDC_TOKEN and NODE_ENV just in case
+            if [[ "$current_var_name" == "VERCEL_OIDC_TOKEN" ]] || [[ "$current_var_name" == "NODE_ENV" ]]; then
+                continue
+            fi
+
+            # Exact matching
+            if [[ "$current_var_name" == "$var_pattern" ]]; then
+                matching_vars+=("$current_var_name")
+                matching_lines+=("$line")
+            fi
+        fi
+    done < "$tmp_env_file"
+
+    # If no exact match found, try prefix matching
+    if [ ${#matching_vars[@]} -eq 0 ]; then
+        is_prefix=true
+        while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            if [[ -z "$line" ]] || [[ "$line" =~ ^[[:space:]]*# ]]; then
+                continue
+            fi
+
+            # Extract variable name and value
+            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+                local current_var_name="${BASH_REMATCH[1]}"
+
+                # Skip VERCEL_OIDC_TOKEN and NODE_ENV just in case
+                if [[ "$current_var_name" == "VERCEL_OIDC_TOKEN" ]] || [[ "$current_var_name" == "NODE_ENV" ]]; then
+                    continue
+                fi
+
+                # Prefix matching: check if variable starts with the pattern
+                if [[ "$current_var_name" == "$var_pattern"* ]]; then
+                    matching_vars+=("$current_var_name")
+                    matching_lines+=("$line")
+                fi
+            fi
+        done < "$tmp_env_file"
+    fi
+
+    # We no longer need the temporary file
+    rm -f "$tmp_env_file"
+
+    # Check if any variables were found
+    if [ ${#matching_vars[@]} -eq 0 ]; then
+        echo -e "${RED}Error: No variables matching '$var_pattern' found in $env_display environment${NC}"
+        exit 1
+    fi
+
+    # Display what will be pulled
+    if [ "$is_prefix" = true ]; then
+        echo -e "${BLUE}Pulling variables matching prefix ${GREEN}$var_pattern${BLUE} from $env_display into local .env...${NC}"
+        echo -e "${YELLOW}Found ${#matching_vars[@]} variable(s) matching prefix:${NC}"
+        for var in "${matching_vars[@]}"; do
+            echo -e "  - ${GREEN}$var${NC}"
+        done
+        echo ""
+    else
+        echo -e "${BLUE}Pulling single variable ${GREEN}$var_pattern${BLUE} from $env_display into local .env...${NC}"
+    fi
+
+    # Ensure local .env exists
+    if [ ! -f "$ENV_FILE" ]; then
+        echo -e "${YELLOW}Local .env file not found. Creating a new one at $ENV_FILE${NC}"
+        touch "$ENV_FILE"
+    fi
+
+    # Update each matching variable in .env
+    local updated_count=0
+    for i in "${!matching_vars[@]}"; do
+        local var_name="${matching_vars[$i]}"
+        local line="${matching_lines[$i]}"
+
+        # Remove any existing line for this variable in .env
+        if [ -f "$ENV_FILE" ]; then
+            sed -i.bak "/^${var_name}=.*/d" "$ENV_FILE"
+            rm -f "$ENV_FILE.bak"
+        fi
+
+        # Append the line from Vercel to .env
+        echo "$line" >> "$ENV_FILE"
+
+        echo -e "${GREEN}✓ Updated $var_name in .env${NC}"
+        ((updated_count++))
+    done
+
+    echo ""
+    echo -e "${GREEN}Pull complete!${NC}"
+    echo -e "Updated variables in .env: ${GREEN}$updated_count${NC}"
+    echo -e "${YELLOW}Note: Review the .env file and update .env.example accordingly (with masked values).${NC}"
+}
+
 # Function to delete a single environment variable or variables matching a prefix from Vercel
 delete_single_env() {
     local var_pattern="$1"
@@ -449,16 +595,22 @@ delete_env() {
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 {pull|push|push-single|delete-single|delete} [arguments]"
+	echo "Usage: $0 {pull|pull-single|push|push-single|delete-single|delete} [arguments]"
     echo ""
     echo "Commands:"
-    echo "  pull [env]              Pull environment variables from Vercel to .env"
-    echo "                          Default: development"
-    echo "                          Options: development, preview, production"
-    echo ""
-    echo "  push [env]              Push environment variables from .env to Vercel"
-    echo "                          Default: development"
-    echo "                          Options: development, preview, production"
+   	echo "  pull [env]              Pull environment variables from Vercel to .env"
+   	echo "                          Default: development"
+   	echo "                          Options: development, preview, production"
+   	echo ""
+   	echo "  pull-single VAR [env]   Pull a single environment variable or variables matching a prefix"
+   	echo "                          from Vercel into local .env"
+   	echo "                          VAR: Variable name or prefix (required)"
+   	echo "                          Default environment: development"
+   	echo "                          Options: development, preview, production"
+   	echo ""
+   	echo "  push [env]              Push environment variables from .env to Vercel"
+   	echo "                          Default: development"
+   	echo "                          Options: development, preview, production"
     echo ""
     echo "  push-single VAR [env]   Push a single environment variable or variables matching a prefix"
     echo "                          from .env to Vercel"
@@ -479,17 +631,20 @@ usage() {
     echo "                          WARNING: This action cannot be undone!"
     echo ""
     echo "Examples:"
-    echo "  $0 pull                              # Pull from development (default)"
-    echo "  $0 pull preview                      # Pull from preview"
-    echo "  $0 push                              # Push to development (default)"
-    echo "  $0 push production                   # Push to production"
-    echo "  $0 push-single SESSION_              # Push all SESSION_* vars to development"
-    echo "  $0 push-single SESSION_ preview      # Push all SESSION_* vars to preview"
-    echo "  $0 push-single SESSION_ production   # Push all SESSION_* vars to production"
-    echo "  $0 delete-single SESSION_            # Delete all SESSION_* vars from development"
-    echo "  $0 delete-single SESSION_ preview    # Delete all SESSION_* vars from preview"
-    echo "  $0 delete-single SESSION_ production # Delete all SESSION_* vars from production"
-    echo "  $0 delete preview                    # Delete all variables from preview"
+   	echo "  $0 pull                              # Pull from development (default)"
+   	echo "  $0 pull preview                      # Pull from preview"
+   	echo "  $0 pull-single SESSION_              # Pull all SESSION_* vars into local .env from development"
+   	echo "  $0 pull-single SESSION_ preview      # Pull all SESSION_* vars into local .env from preview"
+   	echo "  $0 pull-single SESSION_ production   # Pull all SESSION_* vars into local .env from production"
+   	echo "  $0 push                              # Push to development (default)"
+   	echo "  $0 push production                   # Push to production"
+   	echo "  $0 push-single SESSION_              # Push all SESSION_* vars to development"
+   	echo "  $0 push-single SESSION_ preview      # Push all SESSION_* vars to preview"
+   	echo "  $0 push-single SESSION_ production   # Push all SESSION_* vars to production"
+   	echo "  $0 delete-single SESSION_            # Delete all SESSION_* vars from development"
+   	echo "  $0 delete-single SESSION_ preview    # Delete all SESSION_* vars from preview"
+   	echo "  $0 delete-single SESSION_ production # Delete all SESSION_* vars from production"
+   	echo "  $0 delete preview                    # Delete all variables from preview"
     echo ""
     echo "Note: VERCEL_OIDC_TOKEN and NODE_ENV are automatically ignored (for pull/push)"
     echo ""
@@ -504,27 +659,32 @@ COMMAND="${1:-}"
 ENVIRONMENT="${2:-development}"
 
 case "$COMMAND" in
-    pull)
-        pull_env "$ENVIRONMENT"
-        ;;
-    push)
-        push_env "$ENVIRONMENT"
-        ;;
-    push-single)
-        VAR_NAME="${2:-}"
-        ENV_ARG="${3:-development}"
-        push_single_env "$VAR_NAME" "$ENV_ARG"
-        ;;
-    delete-single)
-        VAR_NAME="${2:-}"
-        ENV_ARG="${3:-development}"
-        delete_single_env "$VAR_NAME" "$ENV_ARG"
-        ;;
-    delete)
-        delete_env "$ENVIRONMENT"
-        ;;
-    *)
-        usage
-        exit 1
-        ;;
+	pull)
+		pull_env "$ENVIRONMENT"
+		;;
+	pull-single)
+		VAR_NAME="${2:-}"
+		ENV_ARG="${3:-development}"
+		pull_single_env "$VAR_NAME" "$ENV_ARG"
+		;;
+	push)
+		push_env "$ENVIRONMENT"
+		;;
+	push-single)
+		VAR_NAME="${2:-}"
+		ENV_ARG="${3:-development}"
+		push_single_env "$VAR_NAME" "$ENV_ARG"
+		;;
+	delete-single)
+		VAR_NAME="${2:-}"
+		ENV_ARG="${3:-development}"
+		delete_single_env "$VAR_NAME" "$ENV_ARG"
+		;;
+	delete)
+		delete_env "$ENVIRONMENT"
+		;;
+	*)
+		usage
+		exit 1
+		;;
 esac
